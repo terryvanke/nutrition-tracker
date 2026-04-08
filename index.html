@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NutriAI · 智能营养追踪平台</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <style>
   :root {
     --bg: #0f1117;
@@ -303,6 +304,50 @@
   .toast.success { border-color: var(--green); }
   .toast.error { border-color: var(--red); }
 
+  /* ===== Auth Modal ===== */
+  .auth-overlay {
+    display:none; position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(0,0,0,.6); z-index:600; align-items:center; justify-content:center;
+  }
+  .auth-overlay.show { display:flex; }
+  .auth-box {
+    background:var(--card); border:1px solid var(--border); border-radius:16px;
+    width:420px; max-width:92vw; padding:32px; box-shadow:0 16px 48px rgba(0,0,0,.5);
+  }
+  .auth-title { font-size:20px; font-weight:700; text-align:center; margin-bottom:6px; }
+  .auth-subtitle { font-size:13px; color:var(--text2); text-align:center; margin-bottom:24px; }
+  .auth-input {
+    width:100%; padding:10px 14px; background:var(--bg2); border:1px solid var(--border);
+    border-radius:8px; color:var(--text); font-size:14px; outline:none; margin-bottom:12px;
+  }
+  .auth-input:focus { border-color:var(--primary); }
+  .auth-btn {
+    width:100%; padding:11px; background:var(--primary); border:none; border-radius:8px;
+    color:#fff; font-size:14px; font-weight:600; cursor:pointer; margin-bottom:10px;
+    transition: opacity .2s;
+  }
+  .auth-btn:hover { opacity:.85; }
+  .auth-btn:disabled { opacity:.5; cursor:not-allowed; }
+  .auth-toggle {
+    text-align:center; font-size:13px; color:var(--text2);
+  }
+  .auth-toggle a { color:var(--primary-light); cursor:pointer; text-decoration:underline; }
+  .auth-close {
+    position:absolute; top:12px; right:16px; background:none; border:none;
+    color:var(--text2); font-size:18px; cursor:pointer;
+  }
+  .sync-status {
+    display:flex; align-items:center; gap:6px; padding:8px 12px;
+    background:var(--bg3); border-radius:8px; font-size:12px; color:var(--text2);
+    margin-top:8px; cursor:pointer; transition: background .2s;
+  }
+  .sync-status:hover { background:rgba(108,99,255,.15); }
+  .sync-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; }
+  .sync-dot.online { background:var(--green); }
+  .sync-dot.offline { background:var(--text3); }
+  .sync-dot.syncing { background:var(--yellow); animation: pulse 1s infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
   /* ===== Scrollbar global ===== */
   ::-webkit-scrollbar { width: 6px; height: 6px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -492,7 +537,12 @@
     </button>
   </div>
   <div class="sidebar-bottom">
-    <div class="date-badge" onclick="toggleDateCalendar()" title="点击选择日期" style="cursor:pointer;">
+    <!-- Sync status -->
+    <div class="sync-status" id="sync-bar" onclick="openAuthModal()" title="点击登录以跨设备同步数据">
+      <span class="sync-dot offline" id="sync-dot"></span>
+      <span id="sync-text">☁️ 未登录（点击登录）</span>
+    </div>
+    <div class="date-badge" onclick="toggleDateCalendar()" title="点击选择日期" style="cursor:pointer;margin-top:8px;">
       <div class="date" id="sidebarDate">--</div>
       <div id="sidebar-date-label">今天</div>
     </div>
@@ -1207,6 +1257,28 @@
 
 </main>
 
+<!-- Auth Modal -->
+<div id="auth-overlay" class="auth-overlay" onclick="if(event.target===this)closeAuthModal()">
+  <div class="auth-box" style="position:relative;">
+    <button class="auth-close" onclick="closeAuthModal()">✕</button>
+    <div class="auth-title" id="auth-title">🔐 登录</div>
+    <div class="auth-subtitle">登录后可在不同设备间同步你的数据</div>
+    <div id="auth-login-form">
+      <input type="email" id="auth-email" class="auth-input" placeholder="📧 邮箱地址" autocomplete="email">
+      <input type="password" id="auth-password" class="auth-input" placeholder="🔒 密码" autocomplete="current-password">
+      <button class="auth-btn" id="auth-submit-btn" onclick="handleAuth()">登录</button>
+      <div class="auth-toggle">还没有账号？<a onclick="toggleAuthMode()">注册一个</a></div>
+    </div>
+    <div id="auth-register-form" style="display:none;">
+      <input type="email" id="auth-reg-email" class="auth-input" placeholder="📧 邮箱地址" autocomplete="email">
+      <input type="password" id="auth-reg-password" class="auth-input" placeholder="🔒 密码（至少6位）" autocomplete="new-password">
+      <input type="password" id="auth-reg-confirm" class="auth-input" placeholder="🔒 确认密码" autocomplete="new-password">
+      <button class="auth-btn" id="auth-reg-btn" onclick="handleAuth()">注册</button>
+      <div class="auth-toggle">已有账号？<a onclick="toggleAuthMode()">去登录</a></div>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div id="toast" class="toast"></div>
 
@@ -1236,6 +1308,223 @@ const MODEL_HINTS = {
   moonshot: 'moonshot-v1-8k / moonshot-v1-32k',
   custom: '请填写完整 URL 和模型名'
 };
+
+// ============================================================
+//  SUPABASE CLOUD SYNC
+// ============================================================
+const SUPABASE_URL = 'https://wwoqxuhshsukxblhjh.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_8kS-Fe5dIgQRKNDucpHE-A_EfMJCIzZ';
+let supabaseClient = null;
+let currentUser = null;        // supabase user object
+let isSyncing = false;
+let syncDebounceTimer = null;
+let authMode = 'login';        // 'login' | 'register'
+
+function initSupabase() {
+  try {
+    if (typeof supabase !== 'undefined' && supabase.createClient) {
+      supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+      // Check for existing session
+      supabaseClient.auth.getSession().then(({ data: { session } }) => {
+        if (session) {
+          currentUser = session.user;
+          updateSyncUI();
+          // Load data from cloud
+          loadFromCloud();
+        }
+      });
+      // Listen for auth state changes
+      supabaseClient.auth.onAuthStateChange((event, session) => {
+        if (event === 'SIGNED_IN' && session) {
+          currentUser = session.user;
+          updateSyncUI();
+          loadFromCloud();
+        } else if (event === 'SIGNED_OUT') {
+          currentUser = null;
+          updateSyncUI();
+        }
+      });
+    }
+  } catch(e) {
+    console.warn('Supabase init failed:', e);
+  }
+}
+
+function openAuthModal() {
+  if (currentUser) {
+    // Already logged in, show logout option
+    if (confirm('当前已登录为 ' + currentUser.email + '，是否退出登录？\n退出后数据仍保留在本地。')) {
+      signOut();
+    }
+    return;
+  }
+  document.getElementById('auth-overlay').classList.add('show');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeAuthModal() {
+  document.getElementById('auth-overlay').classList.remove('show');
+  document.body.style.overflow = '';
+}
+
+function toggleAuthMode() {
+  if (authMode === 'login') {
+    authMode = 'register';
+    document.getElementById('auth-login-form').style.display = 'none';
+    document.getElementById('auth-register-form').style.display = 'block';
+    document.getElementById('auth-title').textContent = '📝 注册';
+  } else {
+    authMode = 'login';
+    document.getElementById('auth-login-form').style.display = 'block';
+    document.getElementById('auth-register-form').style.display = 'none';
+    document.getElementById('auth-title').textContent = '🔐 登录';
+  }
+}
+
+async function handleAuth() {
+  if (!supabaseClient) { toast('云同步服务未就绪', 'error'); return; }
+  const btn = authMode === 'login'
+    ? document.getElementById('auth-submit-btn')
+    : document.getElementById('auth-reg-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ 请稍候...';
+
+  try {
+    if (authMode === 'login') {
+      const email = document.getElementById('auth-email').value.trim();
+      const password = document.getElementById('auth-password').value;
+      if (!email || !password) { toast('请填写邮箱和密码', 'error'); btn.disabled = false; btn.textContent = '登录'; return; }
+      const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
+      if (error) { toast('登录失败：' + error.message, 'error'); btn.disabled = false; btn.textContent = '登录'; return; }
+      toast('✅ 登录成功，正在同步数据...', 'success');
+      closeAuthModal();
+    } else {
+      const email = document.getElementById('auth-reg-email').value.trim();
+      const password = document.getElementById('auth-reg-password').value;
+      const confirm = document.getElementById('auth-reg-confirm').value;
+      if (!email || !password) { toast('请填写邮箱和密码', 'error'); btn.disabled = false; btn.textContent = '注册'; return; }
+      if (password.length < 6) { toast('密码至少6位', 'error'); btn.disabled = false; btn.textContent = '注册'; return; }
+      if (password !== confirm) { toast('两次密码不一致', 'error'); btn.disabled = false; btn.textContent = '注册'; return; }
+      const { error } = await supabaseClient.auth.signUp({ email, password });
+      if (error) { toast('注册失败：' + error.message, 'error'); btn.disabled = false; btn.textContent = '注册'; return; }
+      toast('✅ 注册成功！请查收邮箱验证链接', 'success');
+      closeAuthModal();
+    }
+  } catch(e) {
+    toast('操作失败：' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = authMode === 'login' ? '登录' : '注册';
+}
+
+async function signOut() {
+  if (supabaseClient) {
+    await supabaseClient.auth.signOut();
+  }
+  currentUser = null;
+  updateSyncUI();
+  toast('已退出登录', '');
+}
+
+function updateSyncUI() {
+  const dot = document.getElementById('sync-dot');
+  const text = document.getElementById('sync-text');
+  if (currentUser) {
+    dot.className = 'sync-dot online';
+    // Show truncated email
+    const email = currentUser.email || '';
+    text.textContent = '☁️ ' + email;
+  } else {
+    dot.className = 'sync-dot offline';
+    text.textContent = '☁️ 未登录（点击登录）';
+  }
+}
+
+function setSyncingUI(syncing) {
+  const dot = document.getElementById('sync-dot');
+  if (syncing && currentUser) {
+    dot.className = 'sync-dot syncing';
+  } else if (currentUser) {
+    dot.className = 'sync-dot online';
+  }
+}
+
+// Upload current state to Supabase
+async function saveToCloud() {
+  if (!supabaseClient || !currentUser) return;
+  try {
+    setSyncingUI(true);
+    const stateJson = JSON.stringify(state);
+    // Upsert the user_data row (key = 'app_state')
+    const { error } = await supabaseClient
+      .from('user_data')
+      .upsert({ user_id: currentUser.id, key: 'app_state', value: stateJson }, { onConflict: 'user_id,key' });
+    if (error) console.warn('Cloud save error:', error);
+  } catch(e) {
+    console.warn('Cloud save failed:', e);
+  } finally {
+    setSyncingUI(false);
+  }
+}
+
+// Debounced cloud save (avoid saving on every keystroke)
+function debouncedCloudSave() {
+  if (!supabaseClient || !currentUser) return;
+  clearTimeout(syncDebounceTimer);
+  syncDebounceTimer = setTimeout(() => saveToCloud(), 2000);
+}
+
+// Load state from Supabase and merge with local
+async function loadFromCloud() {
+  if (!supabaseClient || !currentUser) return;
+  try {
+    setSyncingUI(true);
+    const { data, error } = await supabaseClient
+      .from('user_data')
+      .select('value, updated_at')
+      .eq('user_id', currentUser.id)
+      .eq('key', 'app_state')
+      .single();
+    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows
+      console.warn('Cloud load error:', error);
+      return;
+    }
+    if (data && data.value) {
+      const cloudState = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+      // Check if cloud data is newer than local
+      const localRaw = localStorage.getItem('nutriai_state');
+      let localLastModified = 0;
+      if (localRaw) {
+        try {
+          const parsed = JSON.parse(localRaw);
+          localLastModified = parsed._lastModified || 0;
+        } catch(e) {}
+      }
+      const cloudLastModified = cloudState._lastModified || 0;
+
+      if (cloudLastModified > localLastModified) {
+        // Cloud is newer: merge cloud data into local state
+        Object.assign(state, cloudState);
+        localStorage.setItem('nutriai_state', JSON.stringify(state));
+        toast('☁️ 已从云端同步数据', 'success');
+        // Re-render everything
+        updateDashboard();
+        renderHistoryChart();
+        renderHistoryList();
+        loadBodyPageState();
+        if (state.profile && state.bmr) showTdeeResult();
+      } else if (localLastModified > cloudLastModified) {
+        // Local is newer: upload to cloud
+        await saveToCloud();
+      }
+      // If equal, no action needed
+    }
+  } catch(e) {
+    console.warn('Cloud load failed:', e);
+  } finally {
+    setSyncingUI(false);
+  }
+}
 
 // ============================================================
 //  STATE
@@ -1274,6 +1563,8 @@ let toastTimer;
   loadFromStorage();
   // Initialize viewing date to today
   viewingDate = getToday();
+  // Initialize Supabase cloud sync
+  initSupabase();
   const today = getToday();
   if (state.historyLogs[today]) {
     state.todayLog = state.historyLogs[today];
@@ -1344,7 +1635,10 @@ function saveToStorage() {
     } else if (state.historyLogs[d]) {
       delete state.historyLogs[d]; // clean up empty logs
     }
+    state._lastModified = Date.now();
     localStorage.setItem('nutriai_state', JSON.stringify(state));
+    // Sync to cloud if logged in
+    debouncedCloudSave();
   } catch(e) {}
 }
 
