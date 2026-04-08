@@ -1314,6 +1314,39 @@ const MODEL_HINTS = {
 // ============================================================
 const SUPABASE_URL = 'https://wwoqxuahsuskuxbilhjt.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3b3F4dWFoc3Vza3V4YmlsaGp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2Mjc4NzEsImV4cCI6MjA5MTIwMzg3MX0.O28NhxO1xdRmC-XQr5eQ7P3EL5BNlTr2ji3EZsxiCqo';
+
+const PARSE_SYSTEM = `你是一个专业的营养分析 AI 助手。
+用户会用自然语言描述他们吃了什么。你需要：
+1. 识别并拆分所有食物
+2. 估算每种食物的重量（单位：克）
+3. 基于标准营养数据计算每种食物的营养成分
+
+严格以 JSON 格式返回，不要有任何多余文字，格式如下：
+{
+  "foods": [
+    {
+      "name": "食物名称（中文）",
+      "name_en": "English name",
+      "weight_g": 估算重量(数字),
+      "kcal": 热量(数字),
+      "protein_g": 蛋白质克数(数字),
+      "fat_g": 脂肪克数(数字),
+      "carbs_g": 碳水化合物克数(数字),
+      "fiber_g": 膳食纤维克数(数字),
+      "note": "备注（如何估算重量的说明）"
+    }
+  ],
+  "total": {
+    "kcal": 总热量,
+    "protein_g": 总蛋白质,
+    "fat_g": 总脂肪,
+    "carbs_g": 总碳水,
+    "fiber_g": 总膳食纤维
+  }
+}
+
+使用中国常见食物的标准营养数据，重量估算请基于常见份量（如：一个鸡蛋约50g，一碗米饭约200g，一杯牛奶约250ml等）。
+所有数字保留一位小数。`;
 let supabaseClient = null;
 let currentUser = null;        // supabase user object
 let isSyncing = false;
@@ -2064,42 +2097,6 @@ async function callLLM(userMsg, systemMsg) {
   const data = await resp.json();
   return data.choices?.[0]?.message?.content || '';
 }
-
-// ============================================================
-//  FOOD PARSING
-// ============================================================
-const PARSE_SYSTEM = `你是一个专业的营养分析 AI 助手。
-用户会用自然语言描述他们吃了什么。你需要：
-1. 识别并拆分所有食物
-2. 估算每种食物的重量（单位：克）
-3. 基于标准营养数据计算每种食物的营养成分
-
-严格以 JSON 格式返回，不要有任何多余文字，格式如下：
-{
-  "foods": [
-    {
-      "name": "食物名称（中文）",
-      "name_en": "English name",
-      "weight_g": 估算重量(数字),
-      "kcal": 热量(数字),
-      "protein_g": 蛋白质克数(数字),
-      "fat_g": 脂肪克数(数字),
-      "carbs_g": 碳水化合物克数(数字),
-      "fiber_g": 膳食纤维克数(数字),
-      "note": "备注（如何估算重量的说明）"
-    }
-  ],
-  "total": {
-    "kcal": 总热量,
-    "protein_g": 总蛋白质,
-    "fat_g": 总脂肪,
-    "carbs_g": 总碳水,
-    "fiber_g": 总膳食纤维
-  }
-}
-
-使用中国常见食物的标准营养数据，重量估算请基于常见份量（如：一个鸡蛋约50g，一碗米饭约200g，一杯牛奶约250ml等）。
-所有数字保留一位小数。`;
 
 async function sendFoodMessage() {
   const input = document.getElementById('chat-input');
