@@ -1538,6 +1538,8 @@ async function loadFromCloud() {
       if (cloudLastModified > localLastModified) {
         // Cloud is newer: merge cloud data into local state
         Object.assign(state, cloudState);
+        // todayLog should always reflect the current viewing date, not whatever was saved in cloud
+        state.todayLog = state.historyLogs[viewingDate] || [];
         localStorage.setItem('nutriai_state', JSON.stringify(state));
         toast('☁️ 已从云端同步数据', 'success');
         // Re-render everything
