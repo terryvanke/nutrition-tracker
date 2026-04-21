@@ -5,7 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>NutriAI · 智能营养追踪平台</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
 <style>
   :root {
     --bg: #0f1117;
@@ -1310,10 +1312,42 @@ const MODEL_HINTS = {
 };
 
 // ============================================================
-//  SUPABASE CLOUD SYNC
+//  FIREBASE CLOUD SYNC
 // ============================================================
-const SUPABASE_URL = 'https://wwoqxuahsuskuxbilhjt.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind3b3F4dWFoc3Vza3V4YmlsaGp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2Mjc4NzEsImV4cCI6MjA5MTIwMzg3MX0.O28NhxO1xdRmC-XQr5eQ7P3EL5BNlTr2ji3EZsxiCqo';
+const firebaseConfig = {
+  apiKey: "AIzaSyAwXT8d-053CJHrazV6jx6fD7hjs-QBtaY",
+  authDomain: "nutriai-afb42.firebaseapp.com",
+  projectId: "nutriai-afb42",
+  storageBucket: "nutriai-afb42.firebasestorage.app",
+  messagingSenderId: "469196377727",
+  appId: "1:469196377727:web:e09f296dd7df85d3e3394a"
+};
+
+let db = null;
+let currentUser = null;
+let isSyncing = false;
+let syncDebounceTimer = null;
+let authMode = 'login';        // 'login' | 'register'
+
+function initFirebase() {
+  try {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+    // Check for existing session
+    firebase.auth().onAuthStateChanged((user) => {
+      if (user) {
+        currentUser = user;
+        updateSyncUI();
+        loadFromCloud();
+      } else {
+        currentUser = null;
+        updateSyncUI();
+      }
+    });
+  } catch(e) {
+    console.warn('Firebase init failed:', e);
+  }
+}
 
 const PARSE_SYSTEM = `你是一个专业的营养分析 AI 助手。
 用户会用自然语言描述他们吃了什么。你需要：
@@ -1347,45 +1381,10 @@ const PARSE_SYSTEM = `你是一个专业的营养分析 AI 助手。
 
 使用中国常见食物的标准营养数据，重量估算请基于常见份量（如：一个鸡蛋约50g，一碗米饭约200g，一杯牛奶约250ml等）。
 所有数字保留一位小数。`;
-let supabaseClient = null;
-let currentUser = null;        // supabase user object
-let isSyncing = false;
-let syncDebounceTimer = null;
-let authMode = 'login';        // 'login' | 'register'
-
-function initSupabase() {
-  try {
-    if (typeof supabase !== 'undefined' && supabase.createClient) {
-      supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
-      // Check for existing session
-      supabaseClient.auth.getSession().then(({ data: { session } }) => {
-        if (session) {
-          currentUser = session.user;
-          updateSyncUI();
-          // Load data from cloud
-          loadFromCloud();
-        }
-      });
-      // Listen for auth state changes
-      supabaseClient.auth.onAuthStateChange((event, session) => {
-        if (event === 'SIGNED_IN' && session) {
-          currentUser = session.user;
-          updateSyncUI();
-          loadFromCloud();
-        } else if (event === 'SIGNED_OUT') {
-          currentUser = null;
-          updateSyncUI();
-        }
-      });
-    }
-  } catch(e) {
-    console.warn('Supabase init failed:', e);
-  }
-}
+// Firebase vars are defined above (before PARSE_SYSTEM), no duplicates here
 
 function openAuthModal() {
   if (currentUser) {
-    // Already logged in, show logout option
     if (confirm('当前已登录为 ' + currentUser.email + '，是否退出登录？\n退出后数据仍保留在本地。')) {
       signOut();
     }
@@ -1415,7 +1414,7 @@ function toggleAuthMode() {
 }
 
 async function handleAuth() {
-  if (!supabaseClient) { toast('云同步服务未就绪', 'error'); return; }
+  if (!db) { toast('云同步服务未就绪', 'error'); return; }
   const btn = authMode === 'login'
     ? document.getElementById('auth-submit-btn')
     : document.getElementById('auth-reg-btn');
@@ -1427,8 +1426,7 @@ async function handleAuth() {
       const email = document.getElementById('auth-email').value.trim();
       const password = document.getElementById('auth-password').value;
       if (!email || !password) { toast('请填写邮箱和密码', 'error'); btn.disabled = false; btn.textContent = '登录'; return; }
-      const { error } = await supabaseClient.auth.signInWithPassword({ email, password });
-      if (error) { toast('登录失败：' + error.message, 'error'); btn.disabled = false; btn.textContent = '登录'; return; }
+      await firebase.auth().signInWithEmailAndPassword(email, password);
       toast('✅ 登录成功，正在同步数据...', 'success');
       closeAuthModal();
     } else {
@@ -1438,22 +1436,28 @@ async function handleAuth() {
       if (!email || !password) { toast('请填写邮箱和密码', 'error'); btn.disabled = false; btn.textContent = '注册'; return; }
       if (password.length < 6) { toast('密码至少6位', 'error'); btn.disabled = false; btn.textContent = '注册'; return; }
       if (password !== confirm) { toast('两次密码不一致', 'error'); btn.disabled = false; btn.textContent = '注册'; return; }
-      const { error } = await supabaseClient.auth.signUp({ email, password });
-      if (error) { toast('注册失败：' + error.message, 'error'); btn.disabled = false; btn.textContent = '注册'; return; }
-      toast('✅ 注册成功！请查收邮箱验证链接', 'success');
+      await firebase.auth().createUserWithEmailAndPassword(email, password);
+      toast('✅ 注册成功！', 'success');
       closeAuthModal();
     }
   } catch(e) {
-    toast('操作失败：' + e.message, 'error');
+    const msg = e.code === 'auth/user-not-found' ? '账号不存在' :
+                e.code === 'auth/wrong-password' ? '密码错误' :
+                e.code === 'auth/email-already-in-use' ? '该邮箱已注册' :
+                e.code === 'auth/weak-password' ? '密码至少6位' :
+                e.code === 'auth/invalid-email' ? '邮箱格式不正确' :
+                e.code === 'auth/invalid-credential' ? '邮箱或密码错误' :
+                e.message;
+    toast((authMode === 'login' ? '登录' : '注册') + '失败：' + msg, 'error');
   }
   btn.disabled = false;
   btn.textContent = authMode === 'login' ? '登录' : '注册';
 }
 
 async function signOut() {
-  if (supabaseClient) {
-    await supabaseClient.auth.signOut();
-  }
+  try {
+    await firebase.auth().signOut();
+  } catch(e) {}
   currentUser = null;
   updateSyncUI();
   toast('已退出登录', '');
@@ -1464,7 +1468,6 @@ function updateSyncUI() {
   const text = document.getElementById('sync-text');
   if (currentUser) {
     dot.className = 'sync-dot online';
-    // Show truncated email
     const email = currentUser.email || '';
     text.textContent = '☁️ ' + email;
   } else {
@@ -1482,17 +1485,17 @@ function setSyncingUI(syncing) {
   }
 }
 
-// Upload current state to Supabase
+// Upload current state to Firebase Firestore
 async function saveToCloud() {
-  if (!supabaseClient || !currentUser) return;
+  if (!db || !currentUser) return;
   try {
     setSyncingUI(true);
-    const stateJson = JSON.stringify(state);
-    // Upsert the user_data row (key = 'app_state')
-    const { error } = await supabaseClient
-      .from('user_data')
-      .upsert({ user_id: currentUser.id, key: 'app_state', value: stateJson }, { onConflict: 'user_id,key' });
-    if (error) console.warn('Cloud save error:', error);
+    state._lastModified = Date.now();
+    const userDocRef = db.collection('users').doc(currentUser.uid);
+    await userDocRef.set({
+      appState: JSON.stringify(state),
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    }, { merge: true });
   } catch(e) {
     console.warn('Cloud save failed:', e);
   } finally {
@@ -1500,30 +1503,21 @@ async function saveToCloud() {
   }
 }
 
-// Debounced cloud save (avoid saving on every keystroke)
+// Debounced cloud save
 function debouncedCloudSave() {
-  if (!supabaseClient || !currentUser) return;
+  if (!db || !currentUser) return;
   clearTimeout(syncDebounceTimer);
   syncDebounceTimer = setTimeout(() => saveToCloud(), 2000);
 }
 
-// Load state from Supabase and merge with local
+// Load state from Firebase Firestore and merge with local
 async function loadFromCloud() {
-  if (!supabaseClient || !currentUser) return;
+  if (!db || !currentUser) return;
   try {
     setSyncingUI(true);
-    const { data, error } = await supabaseClient
-      .from('user_data')
-      .select('value, updated_at')
-      .eq('user_id', currentUser.id)
-      .eq('key', 'app_state')
-      .single();
-    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows
-      console.warn('Cloud load error:', error);
-      return;
-    }
-    if (data && data.value) {
-      const cloudState = typeof data.value === 'string' ? JSON.parse(data.value) : data.value;
+    const doc = await db.collection('users').doc(currentUser.uid).get();
+    if (doc.exists && doc.data().appState) {
+      const cloudState = JSON.parse(doc.data().appState);
       // Check if cloud data is newer than local
       const localRaw = localStorage.getItem('nutriai_state');
       let localLastModified = 0;
@@ -1538,7 +1532,7 @@ async function loadFromCloud() {
       if (cloudLastModified > localLastModified) {
         // Cloud is newer: merge cloud data into local state
         Object.assign(state, cloudState);
-        // todayLog should always reflect the current viewing date, not whatever was saved in cloud
+        // todayLog should always reflect the current viewing date
         state.todayLog = state.historyLogs[viewingDate] || [];
         localStorage.setItem('nutriai_state', JSON.stringify(state));
         toast('☁️ 已从云端同步数据', 'success');
@@ -1552,7 +1546,9 @@ async function loadFromCloud() {
         // Local is newer: upload to cloud
         await saveToCloud();
       }
-      // If equal, no action needed
+    } else {
+      // No cloud data yet, upload current local data
+      await saveToCloud();
     }
   } catch(e) {
     console.warn('Cloud load failed:', e);
@@ -1598,8 +1594,8 @@ let toastTimer;
   loadFromStorage();
   // Initialize viewing date to today
   viewingDate = getToday();
-  // Initialize Supabase cloud sync
-  initSupabase();
+  // Initialize Firebase cloud sync
+  initFirebase();
   const today = getToday();
   if (state.historyLogs[today]) {
     state.todayLog = state.historyLogs[today];
