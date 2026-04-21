@@ -1491,9 +1491,12 @@ async function saveToCloud() {
   try {
     setSyncingUI(true);
     state._lastModified = Date.now();
+    // Exclude todayLog from cloud data - it's a date-specific cache, not persistent data
+    const stateToSave = Object.assign({}, state);
+    delete stateToSave.todayLog;
     const userDocRef = db.collection('users').doc(currentUser.uid);
     await userDocRef.set({
-      appState: JSON.stringify(state),
+      appState: JSON.stringify(stateToSave),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp()
     }, { merge: true });
   } catch(e) {
@@ -1536,7 +1539,7 @@ async function loadFromCloud() {
         state.todayLog = state.historyLogs[viewingDate] || [];
         localStorage.setItem('nutriai_state', JSON.stringify(state));
         toast('☁️ 已从云端同步数据', 'success');
-        // Re-render everything
+        // Re-render everything to reflect synced data
         updateDashboard();
         renderHistoryChart();
         renderHistoryList();
