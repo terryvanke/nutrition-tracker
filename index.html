@@ -235,6 +235,20 @@
   .badge-dinner { background: rgba(168,85,247,.15); color: #c084fc; }
   .badge-snack { background: rgba(251,146,60,.15); color: var(--orange); }
 
+  /* ===== Food DB ===== */
+  .fooddb-card {
+    background: var(--bg3); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 18px; margin-bottom: 12px;
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+  }
+  .fooddb-card:hover { border-color: var(--primary); }
+  .fooddb-name { font-size: 15px; font-weight: 700; color: var(--text); }
+  .fooddb-portion { font-size: 12px; color: var(--text2); margin-top: 3px; }
+  .fooddb-nutrients { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+  .fooddb-nutrient { font-size: 12px; color: var(--text2); }
+  .fooddb-nutrient span { color: var(--text); font-weight: 600; }
+  .fooddb-badge { font-size: 11px; background: rgba(108,99,255,.15); color: var(--primary-light); padding: 2px 8px; border-radius: 20px; }
+
   /* ===== Page Header ===== */
   .page-header { margin-bottom: 28px; }
   .page-title { font-size: 24px; font-weight: 800; margin-bottom: 6px; }
@@ -533,6 +547,9 @@
     </button>
     <button class="nav-item" onclick="goPage('body')">
       <span class="icon">💪</span> 身体追踪
+    </button>
+    <button class="nav-item" onclick="goPage('fooddb')">
+      <span class="icon">🗂️</span> 食物库
     </button>
     <button class="nav-item" onclick="goPage('profile')">
       <span class="icon">👤</span> 个人设置
@@ -1257,7 +1274,26 @@
     </div>
   </div>
 
+
+  <!-- ====== FOOD DATABASE PAGE ====== -->
+  <div id="page-fooddb" class="page">
+    <div class="page-header">
+      <div class="page-title">🗂️ 自定义食物库</div>
+      <div class="page-subtitle">手动维护你常用的食物营养数据，AI 解析时将优先匹配</div>
+    </div>
+
+    <div style="display:flex;gap:12px;margin-bottom:20px;align-items:center;flex-wrap:wrap;">
+      <input id="fooddb-search" class="form-input" style="flex:1;min-width:180px;" placeholder="🔍 搜索食物名称..." oninput="renderFoodDb()" />
+      <button class="btn btn-primary" onclick="openFoodDbModal()">➕ 添加食物</button>
+    </div>
+
+    <div id="fooddb-list">
+      <div class="empty-state"><div class="icon">🗂️</div><p>还没有自定义食物，点击右上角添加</p></div>
+    </div>
+  </div>
+
 </main>
+
 
 <!-- Auth Modal -->
 <div id="auth-overlay" class="auth-overlay" onclick="if(event.target===this)closeAuthModal()">
@@ -1580,6 +1616,7 @@ let state = {
   fitnessGoal: null,   // { type:'lose'|'gain'|'maintain', currentWeight, targetWeight, targetBF, weeks, startDate, recKcal, recProtein }
   bodyRecords: [],     // [{ date:'YYYY-MM-DD', weight, bodyFat, waist, note, time }]
   bodyChartRange: 30,
+  foodDb: [],          // [{ id, name, portionDesc, portionG, kcalPer100, proteinPer100, fatPer100, carbsPer100, fiberPer100 }]
 };
 
 let viewingDate = null; // currently viewing date (YYYY-MM-DD)
@@ -1852,10 +1889,11 @@ function goPage(name) {
   if (name === 'history') { renderHistoryChart(); renderHistoryList(); }
   if (name === 'analysis') updateAnalysisSummary();
   if (name === 'body') { renderBodyPage(); }
+  if (name === 'fooddb') { renderFoodDb(); }
 }
 
 function pageLabel(n) {
-  const m = {dashboard:'概览', record:'饮食', analysis:'分析', history:'历史', body:'身体', profile:'设置'};
+  const m = {dashboard:'概览', record:'饮食', analysis:'分析', history:'历史', body:'身体', profile:'设置', fooddb:'食物库'};
   return m[n]||'';
 }
 
@@ -2131,9 +2169,43 @@ async function sendFoodMessage() {
     if (!jsonMatch) throw new Error('AI 返回格式错误，请重试');
     const parsed = JSON.parse(jsonMatch[0]);
 
+    // ---- 自定义食物库优先匹配 ----
+    let dbHits = 0;
+    parsed.foods = parsed.foods.map(f => {
+      const match = matchFoodDb(f.name);
+      if (!match) return f;
+      dbHits++;
+      // 使用库里设置的份量，如果有；否则保留 AI 估算的重量
+      const weight = match.portionG > 0 ? match.portionG : f.weight_g;
+      const ratio = weight / 100;
+      return {
+        name: match.name,
+        name_en: f.name_en || '',
+        weight_g: weight,
+        kcal: parseFloat((match.kcalPer100 * ratio).toFixed(1)),
+        protein_g: parseFloat((match.proteinPer100 * ratio).toFixed(1)),
+        fat_g: parseFloat((match.fatPer100 * ratio).toFixed(1)),
+        carbs_g: parseFloat((match.carbsPer100 * ratio).toFixed(1)),
+        fiber_g: parseFloat((match.fiberPer100 * ratio).toFixed(1)),
+        note: `来自自定义食物库（${weight}g）`,
+        _fromDb: true
+      };
+    });
+    // 重新计算 total
+    parsed.total = parsed.foods.reduce((acc, f) => {
+      acc.kcal += f.kcal; acc.protein_g += f.protein_g;
+      acc.fat_g += f.fat_g; acc.carbs_g += f.carbs_g; acc.fiber_g += f.fiber_g;
+      return acc;
+    }, { kcal: 0, protein_g: 0, fat_g: 0, carbs_g: 0, fiber_g: 0 });
+    ['kcal','protein_g','fat_g','carbs_g','fiber_g'].forEach(k => {
+      parsed.total[k] = parseFloat(parsed.total[k].toFixed(1));
+    });
+    // ---- 匹配结束 ----
+
     state.pendingFoods = { meal: state.currentMeal, foods: parsed.foods, total: parsed.total };
     renderParsedResult(parsed);
-    appendMessage('ai', `✅ 已解析 ${parsed.foods.length} 种食物，合计约 <strong>${Math.round(parsed.total.kcal)} kcal</strong>。确认无误后点击「添加到今日记录」。`);
+    const dbNote = dbHits > 0 ? `（其中 <strong>${dbHits}</strong> 种来自你的食物库 🗂️）` : '';
+    appendMessage('ai', `✅ 已解析 ${parsed.foods.length} 种食物，合计约 <strong>${Math.round(parsed.total.kcal)} kcal</strong>${dbNote}。确认无误后点击「添加到今日记录」。`);
   } catch(e) {
     appendMessage('ai', '❌ 解析失败：' + e.message + '<br>请检查 API 配置或重新描述食物。');
     document.getElementById('parsed-result').innerHTML = `<div class="empty-state"><div class="icon">⚠️</div><p>${e.message}</p></div>`;
@@ -2161,8 +2233,8 @@ function renderParsedResult(data) {
     <div class="food-item" style="flex-direction:column;align-items:flex-start;">
       <div style="display:flex;justify-content:space-between;width:100%;align-items:flex-start;">
         <div>
-          <div class="food-name">${f.name} <span style="font-size:12px;color:var(--text3)">${f.name_en||''}</span></div>
-          <div class="food-meta">估算重量：${f.weight_g}g ${f.note?'· '+f.note:''}</div>
+          <div class="food-name">${f.name} <span style="font-size:12px;color:var(--text3)">${f.name_en||''}</span>${f._fromDb ? ' <span style="font-size:11px;background:rgba(108,99,255,.15);color:var(--primary-light);padding:1px 6px;border-radius:10px;">🗂️ 食物库</span>' : ''}</div>
+          <div class="food-meta">重量：${f.weight_g}g ${f.note?'· '+f.note:''}</div>
         </div>
         <div style="text-align:right;">
           <div class="food-kcal">${Math.round(f.kcal)}<span class="food-kcal-unit"> kcal</span></div>
@@ -3649,6 +3721,132 @@ function loadBodyPageState() {
 }
 
 // ============================================================
+//  FOOD DATABASE
+// ============================================================
+function renderFoodDb() {
+  const query = (document.getElementById('fooddb-search')?.value || '').trim().toLowerCase();
+  const list = (state.foodDb || []).filter(f => !query || f.name.toLowerCase().includes(query));
+  const container = document.getElementById('fooddb-list');
+  if (!container) return;
+  if (!list.length) {
+    container.innerHTML = query
+      ? `<div class="empty-state"><div class="icon">🔍</div><p>没有找到"${query}"相关的食物</p></div>`
+      : `<div class="empty-state"><div class="icon">🗂️</div><p>还没有自定义食物，点击上方「添加食物」开始创建</p></div>`;
+    return;
+  }
+  container.innerHTML = list.map(f => {
+    const portionText = f.portionDesc ? `${f.portionDesc}${f.portionG ? '（' + f.portionG + 'g）' : ''}` : (f.portionG ? f.portionG + 'g/份' : '');
+    return `<div class="fooddb-card">
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span class="fooddb-name">${f.name}</span>
+          ${portionText ? `<span class="fooddb-badge">📦 ${portionText}</span>` : ''}
+        </div>
+        <div class="fooddb-nutrients">
+          <span class="fooddb-nutrient">热量 <span>${f.kcalPer100}</span> kcal</span>
+          <span class="fooddb-nutrient">蛋白质 <span>${f.proteinPer100}</span>g</span>
+          <span class="fooddb-nutrient">脂肪 <span>${f.fatPer100}</span>g</span>
+          <span class="fooddb-nutrient">碳水 <span>${f.carbsPer100}</span>g</span>
+          <span class="fooddb-nutrient">纤维 <span>${f.fiberPer100}</span>g</span>
+          <span class="fooddb-nutrient" style="color:var(--text3)">（以上为每100g数据）</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0;">
+        <button class="btn btn-ghost btn-sm" onclick="openFoodDbModal('${f.id}')">✏️</button>
+        <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="deleteFoodDbEntry('${f.id}')">🗑️</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function openFoodDbModal(id) {
+  const overlay = document.getElementById('fooddb-modal-overlay');
+  overlay.style.display = 'flex';
+  document.body.style.overflow = 'hidden';
+  if (id) {
+    const entry = (state.foodDb || []).find(f => f.id === id);
+    if (!entry) return;
+    document.getElementById('fooddb-modal-title').textContent = '✏️ 编辑食物';
+    document.getElementById('fooddb-edit-id').value = id;
+    document.getElementById('fdb-name').value = entry.name;
+    document.getElementById('fdb-portion-desc').value = entry.portionDesc || '';
+    document.getElementById('fdb-portion-g').value = entry.portionG || '';
+    document.getElementById('fdb-kcal').value = entry.kcalPer100;
+    document.getElementById('fdb-protein').value = entry.proteinPer100;
+    document.getElementById('fdb-fat').value = entry.fatPer100;
+    document.getElementById('fdb-carbs').value = entry.carbsPer100;
+    document.getElementById('fdb-fiber').value = entry.fiberPer100;
+  } else {
+    document.getElementById('fooddb-modal-title').textContent = '➕ 添加自定义食物';
+    document.getElementById('fooddb-edit-id').value = '';
+    ['fdb-name','fdb-portion-desc','fdb-portion-g','fdb-kcal','fdb-protein','fdb-fat','fdb-carbs','fdb-fiber'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+  }
+}
+
+function closeFoodDbModal() {
+  document.getElementById('fooddb-modal-overlay').style.display = 'none';
+  document.body.style.overflow = '';
+}
+
+function saveFoodDbEntry() {
+  const name = document.getElementById('fdb-name').value.trim();
+  if (!name) { toast('请填写食物名称', 'error'); return; }
+  const kcal = parseFloat(document.getElementById('fdb-kcal').value) || 0;
+  const protein = parseFloat(document.getElementById('fdb-protein').value) || 0;
+  const fat = parseFloat(document.getElementById('fdb-fat').value) || 0;
+  const carbs = parseFloat(document.getElementById('fdb-carbs').value) || 0;
+  const fiber = parseFloat(document.getElementById('fdb-fiber').value) || 0;
+  const portionDesc = document.getElementById('fdb-portion-desc').value.trim();
+  const portionG = parseFloat(document.getElementById('fdb-portion-g').value) || 0;
+
+  if (!state.foodDb) state.foodDb = [];
+  const editId = document.getElementById('fooddb-edit-id').value;
+  if (editId) {
+    const idx = state.foodDb.findIndex(f => f.id === editId);
+    if (idx >= 0) {
+      state.foodDb[idx] = { ...state.foodDb[idx], name, portionDesc, portionG, kcalPer100: kcal, proteinPer100: protein, fatPer100: fat, carbsPer100: carbs, fiberPer100: fiber };
+    }
+    toast('✅ 已更新食物数据', 'success');
+  } else {
+    const newEntry = {
+      id: 'fdb_' + Date.now(),
+      name, portionDesc, portionG,
+      kcalPer100: kcal, proteinPer100: protein, fatPer100: fat, carbsPer100: carbs, fiberPer100: fiber
+    };
+    state.foodDb.push(newEntry);
+    toast('✅ 已添加到食物库', 'success');
+  }
+  saveToStorage();
+  debouncedCloudSave();
+  closeFoodDbModal();
+  renderFoodDb();
+}
+
+function deleteFoodDbEntry(id) {
+  if (!confirm('确认删除此食物？')) return;
+  state.foodDb = (state.foodDb || []).filter(f => f.id !== id);
+  saveToStorage();
+  debouncedCloudSave();
+  renderFoodDb();
+  toast('已删除', '');
+}
+
+// Fuzzy match food name against foodDb
+// Returns matched entry or null
+function matchFoodDb(name) {
+  if (!state.foodDb || !state.foodDb.length) return null;
+  const n = name.toLowerCase().replace(/\s/g, '');
+  // Exact match first
+  let match = state.foodDb.find(f => f.name.toLowerCase().replace(/\s/g, '') === n);
+  if (match) return match;
+  // Contains match
+  match = state.foodDb.find(f => n.includes(f.name.toLowerCase().replace(/\s/g, '')) || f.name.toLowerCase().replace(/\s/g, '').includes(n));
+  return match || null;
+}
+
+// ============================================================
 //  TOAST
 // ============================================================
 function toast(msg, type) {
@@ -3660,5 +3858,57 @@ function toast(msg, type) {
   toastTimer = setTimeout(() => { el.className = 'toast'; }, 3000);
 }
 </script>
+
+<!-- Food DB Modal -->
+<div id="fooddb-modal-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.55);z-index:500;align-items:center;justify-content:center;" onclick="if(event.target===this)closeFoodDbModal()">
+  <div style="background:var(--card);border:1px solid var(--border);border-radius:16px;width:520px;max-width:92vw;max-height:88vh;overflow-y:auto;box-shadow:0 16px 48px rgba(0,0,0,.5);padding:28px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+      <div id="fooddb-modal-title" style="font-size:17px;font-weight:700;">➕ 添加自定义食物</div>
+      <button class="btn btn-ghost btn-sm" onclick="closeFoodDbModal()" style="font-size:18px;">✕</button>
+    </div>
+    <input type="hidden" id="fooddb-edit-id" value="" />
+    <div class="form-group">
+      <label class="form-label">食物名称 <span style="color:var(--red)">*</span></label>
+      <input class="form-input" id="fdb-name" placeholder="例如：自制牛肉沙拉" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">常用份量描述（可选）</label>
+      <input class="form-input" id="fdb-portion-desc" placeholder="例如：一份、一碗、一个" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">常用份量重量（克）</label>
+      <input class="form-input" id="fdb-portion-g" type="number" min="0" placeholder="例如：300（AI 解析时默认使用此重量）" />
+    </div>
+    <div style="background:var(--bg3);border-radius:10px;padding:16px;margin-bottom:16px;">
+      <div style="font-size:13px;color:var(--text2);margin-bottom:12px;">📊 每 100g 的营养数据</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">热量 (kcal)</label>
+          <input class="form-input" id="fdb-kcal" type="number" min="0" step="0.1" placeholder="0" />
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">蛋白质 (g)</label>
+          <input class="form-input" id="fdb-protein" type="number" min="0" step="0.1" placeholder="0" />
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">脂肪 (g)</label>
+          <input class="form-input" id="fdb-fat" type="number" min="0" step="0.1" placeholder="0" />
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">碳水化合物 (g)</label>
+          <input class="form-input" id="fdb-carbs" type="number" min="0" step="0.1" placeholder="0" />
+        </div>
+        <div class="form-group" style="margin-bottom:0">
+          <label class="form-label">膳食纤维 (g)</label>
+          <input class="form-input" id="fdb-fiber" type="number" min="0" step="0.1" placeholder="0" />
+        </div>
+      </div>
+    </div>
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn btn-ghost" onclick="closeFoodDbModal()">取消</button>
+      <button class="btn btn-primary" id="fooddb-save-btn" onclick="saveFoodDbEntry()">✅ 保存</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>
