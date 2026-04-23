@@ -2163,7 +2163,17 @@ async function sendFoodMessage() {
   document.getElementById('add-to-log-btn').style.display = 'none';
 
   try {
-    const raw = await callLLM(text, PARSE_SYSTEM);
+    // 动态构建包含食物库的 system prompt
+    let dynamicSystem = PARSE_SYSTEM;
+    if (state.foodDb && state.foodDb.length > 0) {
+      const dbLines = state.foodDb.map(f => {
+        const unit = f.portionUnit || 'g';
+        const portionInfo = f.portionG > 0 ? `，每份（${f.portionDesc || '1份'}）= ${f.portionG}${unit}` : '';
+        return `- ${f.name}：每100${unit}含热量${f.kcalPer100}kcal、蛋白质${f.proteinPer100}g、脂肪${f.fatPer100}g、碳水${f.carbsPer100}g、纤维${f.fiberPer100}g${portionInfo}`;
+      }).join('\n');
+      dynamicSystem += `\n\n【用户自定义食物库（优先使用以下数据，按实际数量×份量计算重量）】\n${dbLines}`;
+    }
+    const raw = await callLLM(text, dynamicSystem);
     // Extract JSON
     const jsonMatch = raw.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('AI 返回格式错误，请重试');
@@ -2175,9 +2185,10 @@ async function sendFoodMessage() {
       const match = matchFoodDb(f.name);
       if (!match) return f;
       dbHits++;
-      // 使用库里设置的份量，如果有；否则保留 AI 估算的重量
       const matchUnit = match.portionUnit || 'g';
-      const weight = match.portionG > 0 ? match.portionG : f.weight_g;
+      // 优先使用 AI 估算的重量（AI 已考虑了「2包」「3个」等数量）
+      // 仅当 AI 没给重量时，才回退到库里的默认份量
+      const weight = (f.weight_g > 0) ? f.weight_g : (match.portionG > 0 ? match.portionG : 100);
       const ratio = weight / 100;
       return {
         name: match.name,
@@ -2188,7 +2199,7 @@ async function sendFoodMessage() {
         fat_g: parseFloat((match.fatPer100 * ratio).toFixed(1)),
         carbs_g: parseFloat((match.carbsPer100 * ratio).toFixed(1)),
         fiber_g: parseFloat((match.fiberPer100 * ratio).toFixed(1)),
-        note: `来自自定义食物库（${weight}${matchUnit}）`,
+        note: `来自食物库，AI估算重量${weight}${matchUnit}`,
         _fromDb: true
       };
     });
