@@ -2168,10 +2168,21 @@ async function sendFoodMessage() {
     if (state.foodDb && state.foodDb.length > 0) {
       const dbLines = state.foodDb.map(f => {
         const unit = f.portionUnit || 'g';
-        const portionInfo = f.portionG > 0 ? `，每份（${f.portionDesc || '1份'}）= ${f.portionG}${unit}` : '';
+        const portionInfo = f.portionG > 0
+          ? `，每份（${f.portionDesc || '1份'}）= ${f.portionG}${unit}，【重要：weight_g 必须填「用户说的数量 × ${f.portionG}」，例如2份就填${f.portionG * 2}，3份就填${f.portionG * 3}】`
+          : '';
         return `- ${f.name}：每100${unit}含热量${f.kcalPer100}kcal、蛋白质${f.proteinPer100}g、脂肪${f.fatPer100}g、碳水${f.carbsPer100}g、纤维${f.fiberPer100}g${portionInfo}`;
       }).join('\n');
-      dynamicSystem += `\n\n【用户自定义食物库（优先使用以下数据，按实际数量×份量计算重量）】\n${dbLines}`;
+      dynamicSystem += `\n\n【用户自定义食物库 - 强制规则】
+以下是用户预设的食物数据，遇到匹配项时：
+1. 必须使用下方提供的每100g营养数据（不得使用通用数据库）
+2. 若用户说了数量（如"2包""3个""半份"），weight_g = 数量 × 每份克数（已在各条目末尾标注）
+3. 若未说数量，weight_g = 1 × 每份克数（即默认1份）
+4. kcal/protein_g/fat_g/carbs_g/fiber_g 均按 weight_g/100 × 每100g数值计算
+5. note 字段注明「来自食物库，X份×每份Yg=Zg」
+
+食物库数据：
+${dbLines}`;
     }
     const raw = await callLLM(text, dynamicSystem);
     // Extract JSON
@@ -2179,17 +2190,54 @@ async function sendFoodMessage() {
     if (!jsonMatch) throw new Error('AI 返回格式错误，请重试');
     const parsed = JSON.parse(jsonMatch[0]);
 
-    // ---- 自定义食物库优先匹配 ----
+    // ---- 自定义食物库优先匹配（双保险校验）----
+    // 从用户输入中提取数量词（中文数字和阿拉伯数字均支持）
+    const cnNums = {'一':1,'两':2,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,'半':0.5};
+    function extractQty(inputText, foodName) {
+      // 在食物名前后找数量词，如 "2包坚果脆"、"坚果脆2包"、"两包坚果脆"
+      const shortName = foodName.replace(/\s/g, '').substring(0, 4); // 取前4字做匹配锚点
+      // 匹配：[数字/中文数字][量词?][食物名] 或 [食物名][数字/中文数字]
+      const pattern = new RegExp(
+        `([\\d.]+|[一两二三四五六七八九十半])\\s*[个包袋盒杯碗片块条根颗粒份瓶罐]?\\s*${shortName}|${shortName}\\s*[\\d.]+|${shortName}\\s*[一两二三四五六七八九十半]`,
+        'i'
+      );
+      const m = inputText.match(pattern);
+      if (!m) return null;
+      const raw = m[0];
+      // 提取数字部分
+      const numMatch = raw.match(/[\d.]+/);
+      if (numMatch) return parseFloat(numMatch[0]);
+      for (const [cn, val] of Object.entries(cnNums)) {
+        if (raw.includes(cn)) return val;
+      }
+      return null;
+    }
+
     let dbHits = 0;
     parsed.foods = parsed.foods.map(f => {
       const match = matchFoodDb(f.name);
       if (!match) return f;
       dbHits++;
       const matchUnit = match.portionUnit || 'g';
-      // 优先使用 AI 估算的重量（AI 已考虑了「2包」「3个」等数量）
-      // 仅当 AI 没给重量时，才回退到库里的默认份量
-      const weight = (f.weight_g > 0) ? f.weight_g : (match.portionG > 0 ? match.portionG : 100);
+      const singlePortionG = match.portionG > 0 ? match.portionG : 100;
+
+      // 双保险：检查 AI 是否漏算数量
+      // 1. 先从原始输入提取数量
+      const qty = extractQty(text, match.name) || extractQty(text, f.name);
+      // 2. AI 给的重量
+      let weight = (f.weight_g > 0) ? f.weight_g : singlePortionG;
+      // 3. 如果提取到数量 >1，且 AI 给的重量 ≈ 单份重量（误差10%内），说明 AI 没乘数量
+      if (qty && qty > 0 && match.portionG > 0) {
+        const expectedWeight = qty * singlePortionG;
+        const aiUsedSinglePortion = Math.abs(weight - singlePortionG) / singlePortionG < 0.15;
+        if (aiUsedSinglePortion && Math.abs(qty - 1) > 0.01) {
+          // AI 漏算了数量，强制修正
+          weight = expectedWeight;
+        }
+      }
+
       const ratio = weight / 100;
+      const qtyStr = qty && match.portionG > 0 ? `${qty}份×每份${singlePortionG}${matchUnit}=${weight}${matchUnit}` : `${weight}${matchUnit}`;
       return {
         name: match.name,
         name_en: f.name_en || '',
@@ -2199,7 +2247,7 @@ async function sendFoodMessage() {
         fat_g: parseFloat((match.fatPer100 * ratio).toFixed(1)),
         carbs_g: parseFloat((match.carbsPer100 * ratio).toFixed(1)),
         fiber_g: parseFloat((match.fiberPer100 * ratio).toFixed(1)),
-        note: `来自食物库，AI估算重量${weight}${matchUnit}`,
+        note: `来自食物库，${qtyStr}`,
         _fromDb: true
       };
     });
