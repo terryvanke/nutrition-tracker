@@ -2191,26 +2191,48 @@ ${dbLines}`;
     const parsed = JSON.parse(jsonMatch[0]);
 
     // ---- 自定义食物库优先匹配（双保险校验）----
-    // 从用户输入中提取数量词（中文数字和阿拉伯数字均支持）
-    const cnNums = {'一':1,'两':2,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,'半':0.5};
-    function extractQty(inputText, foodName) {
-      // 在食物名前后找数量词，如 "2包坚果脆"、"坚果脆2包"、"两包坚果脆"
-      const shortName = foodName.replace(/\s/g, '').substring(0, 4); // 取前4字做匹配锚点
-      // 匹配：[数字/中文数字][量词?][食物名] 或 [食物名][数字/中文数字]
-      const pattern = new RegExp(
-        `([\\d.]+|[一两二三四五六七八九十半])\\s*[个包袋盒杯碗片块条根颗粒份瓶罐]?\\s*${shortName}|${shortName}\\s*[\\d.]+|${shortName}\\s*[一两二三四五六七八九十半]`,
-        'i'
-      );
-      const m = inputText.match(pattern);
-      if (!m) return null;
-      const raw = m[0];
-      // 提取数字部分
-      const numMatch = raw.match(/[\d.]+/);
-      if (numMatch) return parseFloat(numMatch[0]);
-      for (const [cn, val] of Object.entries(cnNums)) {
-        if (raw.includes(cn)) return val;
+    // 预处理：从用户原始输入中提取所有"数量+量词"的位置列表
+    const cnNumMap = {'一':1,'两':2,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,'半':0.5};
+    // 匹配所有数量词：如 "2包" "3个" "两瓶" "半份" 等，记录其在输入中的位置和数值
+    const qtyPattern = /([\d.]+|[一两二三四五六七八九十半])\s*[个包袋盒杯碗片块条根颗粒份瓶罐]/g;
+    const allQtyMatches = [];
+    let qm;
+    while ((qm = qtyPattern.exec(text)) !== null) {
+      const raw = qm[1];
+      const val = /[\d.]/.test(raw) ? parseFloat(raw) : (cnNumMap[raw] || null);
+      if (val !== null) {
+        allQtyMatches.push({ index: qm.index, end: qm.index + qm[0].length, qty: val, text: qm[0] });
       }
-      return null;
+    }
+
+    // 根据食物库条目名称，在原始输入中找到该食物出现的位置，然后找最近的数量词
+    function findQtyForFood(inputText, foodLibName, aiFoodName) {
+      // 用食物库名字的关键词（去空格后的最后几个中文字）在输入中定位
+      const candidates = [foodLibName, aiFoodName].filter(Boolean);
+      let bestPos = -1;
+      for (const name of candidates) {
+        // 尝试用名字的不同子串去定位（取末尾4字、末尾3字，增加命中率）
+        const stripped = name.replace(/\s/g, '');
+        const tries = [
+          stripped,
+          stripped.slice(-4),
+          stripped.slice(-3),
+          stripped.slice(-5),
+        ].filter(s => s.length >= 2);
+        for (const sub of tries) {
+          const idx = inputText.indexOf(sub);
+          if (idx !== -1) { bestPos = idx; break; }
+        }
+        if (bestPos !== -1) break;
+      }
+      if (bestPos === -1 || allQtyMatches.length === 0) return null;
+      // 找距离 bestPos 最近的数量词（前后各20字内）
+      let nearest = null, minDist = Infinity;
+      for (const q of allQtyMatches) {
+        const dist = Math.min(Math.abs(q.index - bestPos), Math.abs(q.end - bestPos));
+        if (dist < minDist && dist <= 20) { minDist = dist; nearest = q; }
+      }
+      return nearest ? nearest.qty : null;
     }
 
     let dbHits = 0;
@@ -2221,23 +2243,22 @@ ${dbLines}`;
       const matchUnit = match.portionUnit || 'g';
       const singlePortionG = match.portionG > 0 ? match.portionG : 100;
 
-      // 双保险：检查 AI 是否漏算数量
-      // 1. 先从原始输入提取数量
-      const qty = extractQty(text, match.name) || extractQty(text, f.name);
-      // 2. AI 给的重量
+      // 双保险：从原始输入提取该食物对应的数量
+      const qty = findQtyForFood(text, match.name, f.name);
+      // AI 给的重量（有时 AI 已正确计算了，有时没有）
       let weight = (f.weight_g > 0) ? f.weight_g : singlePortionG;
-      // 3. 如果提取到数量 >1，且 AI 给的重量 ≈ 单份重量（误差10%内），说明 AI 没乘数量
+      // 如果提取到有效数量，且 AI 返回重量 ≈ 单份重量（说明 AI 没乘数量），则强制修正
       if (qty && qty > 0 && match.portionG > 0) {
-        const expectedWeight = qty * singlePortionG;
-        const aiUsedSinglePortion = Math.abs(weight - singlePortionG) / singlePortionG < 0.15;
-        if (aiUsedSinglePortion && Math.abs(qty - 1) > 0.01) {
-          // AI 漏算了数量，强制修正
-          weight = expectedWeight;
+        const aiOnlySinglePortion = Math.abs(weight - singlePortionG) / singlePortionG < 0.15;
+        if (aiOnlySinglePortion && Math.abs(qty - 1) > 0.01) {
+          weight = qty * singlePortionG;
         }
       }
 
       const ratio = weight / 100;
-      const qtyStr = qty && match.portionG > 0 ? `${qty}份×每份${singlePortionG}${matchUnit}=${weight}${matchUnit}` : `${weight}${matchUnit}`;
+      const qtyStr = qty && match.portionG > 0
+        ? `${qty}份×每份${singlePortionG}${matchUnit}=${weight}${matchUnit}`
+        : `${weight}${matchUnit}`;
       return {
         name: match.name,
         name_en: f.name_en || '',
