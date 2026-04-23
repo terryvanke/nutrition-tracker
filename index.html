@@ -2176,6 +2176,7 @@ async function sendFoodMessage() {
       if (!match) return f;
       dbHits++;
       // 使用库里设置的份量，如果有；否则保留 AI 估算的重量
+      const matchUnit = match.portionUnit || 'g';
       const weight = match.portionG > 0 ? match.portionG : f.weight_g;
       const ratio = weight / 100;
       return {
@@ -2187,7 +2188,7 @@ async function sendFoodMessage() {
         fat_g: parseFloat((match.fatPer100 * ratio).toFixed(1)),
         carbs_g: parseFloat((match.carbsPer100 * ratio).toFixed(1)),
         fiber_g: parseFloat((match.fiberPer100 * ratio).toFixed(1)),
-        note: `来自自定义食物库（${weight}g）`,
+        note: `来自自定义食物库（${weight}${matchUnit}）`,
         _fromDb: true
       };
     });
@@ -3735,7 +3736,8 @@ function renderFoodDb() {
     return;
   }
   container.innerHTML = list.map(f => {
-    const portionText = f.portionDesc ? `${f.portionDesc}${f.portionG ? '（' + f.portionG + 'g）' : ''}` : (f.portionG ? f.portionG + 'g/份' : '');
+    const unit = f.portionUnit || 'g';
+    const portionText = f.portionDesc ? `${f.portionDesc}${f.portionG ? '（' + f.portionG + unit + '）' : ''}` : (f.portionG ? f.portionG + unit + '/份' : '');
     return `<div class="fooddb-card">
       <div style="flex:1;min-width:0;">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -3759,6 +3761,12 @@ function renderFoodDb() {
   }).join('');
 }
 
+function updateFdbUnitLabel() {
+  const unit = document.getElementById('fdb-portion-unit')?.value || 'g';
+  const label = document.getElementById('fdb-per100-label');
+  if (label) label.textContent = unit === 'ml' ? '📊 每 100ml 的营养数据' : '📊 每 100g 的营养数据';
+}
+
 function openFoodDbModal(id) {
   const overlay = document.getElementById('fooddb-modal-overlay');
   overlay.style.display = 'flex';
@@ -3771,6 +3779,7 @@ function openFoodDbModal(id) {
     document.getElementById('fdb-name').value = entry.name;
     document.getElementById('fdb-portion-desc').value = entry.portionDesc || '';
     document.getElementById('fdb-portion-g').value = entry.portionG || '';
+    document.getElementById('fdb-portion-unit').value = entry.portionUnit || 'g';
     document.getElementById('fdb-kcal').value = entry.kcalPer100;
     document.getElementById('fdb-protein').value = entry.proteinPer100;
     document.getElementById('fdb-fat').value = entry.fatPer100;
@@ -3782,7 +3791,9 @@ function openFoodDbModal(id) {
     ['fdb-name','fdb-portion-desc','fdb-portion-g','fdb-kcal','fdb-protein','fdb-fat','fdb-carbs','fdb-fiber'].forEach(id => {
       document.getElementById(id).value = '';
     });
+    document.getElementById('fdb-portion-unit').value = 'g';
   }
+  updateFdbUnitLabel();
 }
 
 function closeFoodDbModal() {
@@ -3800,19 +3811,20 @@ function saveFoodDbEntry() {
   const fiber = parseFloat(document.getElementById('fdb-fiber').value) || 0;
   const portionDesc = document.getElementById('fdb-portion-desc').value.trim();
   const portionG = parseFloat(document.getElementById('fdb-portion-g').value) || 0;
+  const portionUnit = document.getElementById('fdb-portion-unit').value || 'g';
 
   if (!state.foodDb) state.foodDb = [];
   const editId = document.getElementById('fooddb-edit-id').value;
   if (editId) {
     const idx = state.foodDb.findIndex(f => f.id === editId);
     if (idx >= 0) {
-      state.foodDb[idx] = { ...state.foodDb[idx], name, portionDesc, portionG, kcalPer100: kcal, proteinPer100: protein, fatPer100: fat, carbsPer100: carbs, fiberPer100: fiber };
+      state.foodDb[idx] = { ...state.foodDb[idx], name, portionDesc, portionG, portionUnit, kcalPer100: kcal, proteinPer100: protein, fatPer100: fat, carbsPer100: carbs, fiberPer100: fiber };
     }
     toast('✅ 已更新食物数据', 'success');
   } else {
     const newEntry = {
       id: 'fdb_' + Date.now(),
-      name, portionDesc, portionG,
+      name, portionDesc, portionG, portionUnit,
       kcalPer100: kcal, proteinPer100: protein, fatPer100: fat, carbsPer100: carbs, fiberPer100: fiber
     };
     state.foodDb.push(newEntry);
@@ -3876,11 +3888,17 @@ function toast(msg, type) {
       <input class="form-input" id="fdb-portion-desc" placeholder="例如：一份、一碗、一个" />
     </div>
     <div class="form-group">
-      <label class="form-label">常用份量重量（克）</label>
-      <input class="form-input" id="fdb-portion-g" type="number" min="0" placeholder="例如：300（AI 解析时默认使用此重量）" />
+      <label class="form-label">常用份量重量</label>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input class="form-input" id="fdb-portion-g" type="number" min="0" placeholder="例如：300（AI 解析时默认使用）" style="flex:1;" />
+        <select class="form-select" id="fdb-portion-unit" style="width:80px;flex-shrink:0;" onchange="updateFdbUnitLabel()">
+          <option value="g">克 (g)</option>
+          <option value="ml">毫升 (ml)</option>
+        </select>
+      </div>
     </div>
     <div style="background:var(--bg3);border-radius:10px;padding:16px;margin-bottom:16px;">
-      <div style="font-size:13px;color:var(--text2);margin-bottom:12px;">📊 每 100g 的营养数据</div>
+      <div style="font-size:13px;color:var(--text2);margin-bottom:12px;" id="fdb-per100-label">📊 每 100g 的营养数据</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
         <div class="form-group" style="margin-bottom:0">
           <label class="form-label">热量 (kcal)</label>
