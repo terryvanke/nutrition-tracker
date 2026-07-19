@@ -1,0 +1,21 @@
+{
+  "name": "nutriai-nutrition-tracker",
+  "version": "0.2.1",
+  "private": true,
+  "packageManager": "pnpm@11.7.0",
+  "engines": { "node": ">=22.12.0" },
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node tests/security-smoke.mjs && node tests/data-model.test.mjs && node tests/firestore-rules.test.mjs && node tests/cloud-sync.test.mjs && node tests/data-management.test.mjs && node tests/reliability.test.mjs && node tests/repository-completeness.test.mjs && node tests/experience.test.mjs && node tests/launcher.test.mjs",
+    "test:rules": "firebase emulators:exec --only firestore \"node tests/firestore-emulator.test.mjs\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^5.0.1",
+    "firebase": "^12.16.0",
+    "firebase-tools": "^15.23.0",
+    "vite": "^8.1.4"
+  }
+}

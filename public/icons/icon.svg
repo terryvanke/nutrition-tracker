@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="NutriAI">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#6c63ff"/><stop offset="1" stop-color="#4ade80"/></linearGradient></defs>
+  <rect width="512" height="512" rx="112" fill="#1a1d2e"/>
+  <circle cx="256" cy="270" r="154" fill="url(#g)"/>
+  <path d="M158 270c58-8 101 25 121 91-65 8-111-22-121-91Zm196-119c8 70-20 117-86 141-12-68 15-116 86-141Z" fill="#fff"/>
+</svg>
