@@ -20,7 +20,7 @@ assert.match(css, /:focus-visible/);
 assert.match(css, /data-theme="light"/);
 assert.match(app, /function toggleTheme\(/);
 assert.match(app, /function enhanceActions\(/);
-assert.match(app, /navigator\.serviceWorker\.register\('\/sw\.js'\)/);
+assert.match(app, /navigator\.serviceWorker\.register\(`\$\{import\.meta\.env\.BASE_URL\}sw\.js`\)/);
 const initCall = app.lastIndexOf('\ninit();');
 const actionListener = app.lastIndexOf("document.addEventListener('click'");
 const waterConstant = app.indexOf('const WATER_GOAL_DEFAULT');
@@ -28,5 +28,6 @@ assert.ok(initCall > actionListener, 'application must initialize after UI event
 assert.ok(initCall > waterConstant, 'application must initialize after dashboard constants');
 assert.match(sw, /caches\.open/);
 assert.match(sw, /addEventListener\('fetch'/);
+assert.match(sw, /const BASE = new URL\('\.\/'/);
 
 console.log('PASS PWA, theme and accessibility experience tests');

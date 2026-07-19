@@ -2984,7 +2984,7 @@ new MutationObserver(records => records.forEach(record => record.addedNodes.forE
 }))).observe(document.body, { childList: true, subtree: true });
 
 if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(error => {
+  window.addEventListener('load', () => navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(error => {
     console.warn('Offline support registration failed:', error);
   }));
 }

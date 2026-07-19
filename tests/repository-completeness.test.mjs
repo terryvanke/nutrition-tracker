@@ -4,7 +4,8 @@ import fs from 'node:fs';
 for (const file of [
   'README.md', 'LICENSE', 'PRIVACY.md', 'SECURITY.md', 'CONTRIBUTING.md',
   'CHANGELOG.md', '.env.example', '.github/pull_request_template.md',
-  '.github/ISSUE_TEMPLATE/bug_report.yml', '.github/ISSUE_TEMPLATE/feature_request.yml'
+  '.github/ISSUE_TEMPLATE/bug_report.yml', '.github/ISSUE_TEMPLATE/feature_request.yml',
+  '.github/workflows/pages.yml', 'vite.config.js'
 ]) {
   assert.equal(fs.existsSync(new URL(`../${file}`, import.meta.url)), true, `missing ${file}`);
 }
