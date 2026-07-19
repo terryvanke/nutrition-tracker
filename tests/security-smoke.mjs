@@ -40,6 +40,10 @@ assert.doesNotMatch(inlineScript, /\beval\s*\(/,
   'eval is forbidden');
 assert.doesNotMatch(inlineScript, /AIza[0-9A-Za-z_-]{20,}/,
   'Firebase project configuration must not be hard-coded');
+assert.doesNotMatch(inlineScript, /sessionStorage/,
+  'API credentials must remain in memory and never enter Web Storage');
+assert.match(inlineScript, /const sessionSecrets = \{ ai: '', usda: '' \}/,
+  'API credentials must use an in-memory store');
 
 const actionMapSource = inlineScript.match(/const UI_ACTIONS = \{([\s\S]*?)\n\};/)?.[1] || '';
 for (const match of html.matchAll(/data-(?:action|change-action)="([^"]+)"/g)) {

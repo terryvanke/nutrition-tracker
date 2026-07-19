@@ -28,20 +28,18 @@ const MODEL_HINTS = {
   moonshot: 'moonshot-v1-8k / moonshot-v1-32k'
 };
 
-// Sensitive credentials are session-only. They must never enter application
-// state, localStorage, logs, or cloud synchronization payloads.
-const SECRET_KEYS = {
-  ai: 'nutriai_secret_ai_key',
-  usda: 'nutriai_secret_usda_key'
-};
+// Sensitive credentials are held only in module memory. They disappear on
+// refresh and never enter Web Storage, application state, logs, exports or
+// cloud synchronization payloads.
+const sessionSecrets = { ai: '', usda: '' };
 
 function getSecret(name) {
-  return sessionStorage.getItem(SECRET_KEYS[name]) || '';
+  return sessionSecrets[name] || '';
 }
 
 function setSecret(name, value) {
-  if (value) sessionStorage.setItem(SECRET_KEYS[name], value);
-  else sessionStorage.removeItem(SECRET_KEYS[name]);
+  if (!(name in sessionSecrets)) throw new Error('Unknown credential type');
+  sessionSecrets[name] = String(value || '');
 }
 
 function sanitizePersistedState(source) {
@@ -863,8 +861,8 @@ async function resetAllData() {
   if (!confirm('确定要清除这台设备上的全部数据吗？\n云端数据不会删除；如已登录，本操作会同时退出登录。')) return;
   if (currentUser) await firebase.auth().signOut().catch(() => {});
   localStorage.removeItem('nutriai_state');
-  sessionStorage.removeItem(SECRET_KEYS.ai);
-  sessionStorage.removeItem(SECRET_KEYS.usda);
+  setSecret('ai', '');
+  setSecret('usda', '');
   location.reload();
 }
 
@@ -965,8 +963,8 @@ async function deleteAccountAndData() {
     await deleteAllCloudData();
     await currentUser.delete();
     localStorage.removeItem('nutriai_state');
-    sessionStorage.removeItem(SECRET_KEYS.ai);
-    sessionStorage.removeItem(SECRET_KEYS.usda);
+    setSecret('ai', '');
+    setSecret('usda', '');
     location.reload();
   } catch (error) {
     const message = error.code === 'auth/requires-recent-login'
