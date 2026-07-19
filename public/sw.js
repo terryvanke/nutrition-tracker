@@ -1,5 +1,6 @@
 const CACHE = 'nutriai-shell-v1';
-const SHELL = ['/', '/manifest.webmanifest', '/icons/icon.svg'];
+const BASE = new URL('./', self.location.href).pathname;
+const SHELL = [BASE, `${BASE}manifest.webmanifest`, `${BASE}icons/icon.svg`];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)));
@@ -17,5 +18,5 @@ self.addEventListener('fetch', event => {
     const copy = response.clone();
     caches.open(CACHE).then(cache => cache.put(event.request, copy));
     return response;
-  }).catch(() => caches.match(event.request).then(cached => cached || caches.match('/'))));
+  }).catch(() => caches.match(event.request).then(cached => cached || caches.match(BASE))));
 });
