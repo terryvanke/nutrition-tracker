@@ -1,0 +1,82 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owns(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    function validDateKey(value) {
+      return value is string && value.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$');
+    }
+
+    match /users/{userId} {
+      // Read/delete only for one-time migration from the legacy appState blob.
+      // New monolithic writes are deliberately forbidden.
+      allow read, delete: if owns(userId);
+
+      match /profile/{documentId} {
+        allow read, delete: if owns(userId) && documentId == 'current';
+        allow create, update: if owns(userId) && documentId == 'current'
+          && request.resource.data.keys().hasOnly([
+            'gender', 'age', 'height', 'weight', 'goal', 'activity',
+            'bmr', 'tdee', 'targetKcal', 'updatedAt', 'clientUpdatedAt', 'schemaVersion'
+          ]);
+      }
+
+      match /settings/{documentId} {
+        allow read, delete: if owns(userId) && documentId == 'current';
+        allow create, update: if owns(userId) && documentId == 'current'
+          && request.resource.data.keys().hasOnly([
+            'waterGoal', 'apiProvider', 'apiModel', 'historyRange',
+            'bodyChartRange', 'fitnessGoal', 'updatedAt', 'clientUpdatedAt', 'schemaVersion'
+          ]);
+      }
+
+      match /foodLogs/{date} {
+        allow read, delete: if owns(userId) && validDateKey(date);
+        allow create, update: if owns(userId) && validDateKey(date)
+          && request.resource.data.keys().hasOnly(['entries', 'updatedAt', 'clientUpdatedAt', 'schemaVersion'])
+          && request.resource.data.entries is list
+          && request.resource.data.entries.size() <= 100;
+      }
+
+      match /waterLogs/{date} {
+        allow read, delete: if owns(userId) && validDateKey(date);
+        allow create, update: if owns(userId) && validDateKey(date)
+          && request.resource.data.keys().hasOnly(['total', 'records', 'updatedAt', 'clientUpdatedAt', 'schemaVersion'])
+          && request.resource.data.total is number
+          && request.resource.data.total >= 0
+          && request.resource.data.total <= 30000
+          && request.resource.data.records is list
+          && request.resource.data.records.size() <= 200;
+      }
+
+      match /bodyRecords/{recordId} {
+        allow read, delete: if owns(userId);
+        allow create, update: if owns(userId)
+          && request.resource.data.keys().hasOnly([
+            'date', 'weight', 'bodyFat', 'waist', 'note', 'time',
+            'updatedAt', 'clientUpdatedAt', 'schemaVersion'
+          ])
+          && validDateKey(request.resource.data.date)
+          && request.resource.data.weight is number
+          && request.resource.data.weight > 0
+          && request.resource.data.weight <= 500;
+      }
+
+      match /foods/{foodId} {
+        allow read, delete: if owns(userId);
+        allow create, update: if owns(userId)
+          && request.resource.data.keys().hasOnly([
+            'name', 'portionDesc', 'portionG', 'portionUnit', 'kcalPer100',
+            'proteinPer100', 'fatPer100', 'carbsPer100', 'fiberPer100',
+            'updatedAt', 'clientUpdatedAt', 'schemaVersion'
+          ])
+          && request.resource.data.name is string
+          && request.resource.data.name.size() > 0
+          && request.resource.data.name.size() <= 100;
+      }
+    }
+  }
+}

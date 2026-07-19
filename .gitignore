@@ -1,10 +1,24 @@
-# OS
+# Dependencies and builds
+node_modules/
+dist/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Firebase emulator output
+firebase-debug.log
+firestore-debug.log
+.firebase/
+
+# OS and editor files
 Thumbs.db
 .DS_Store
-
-# IDE
 .vscode/
 .idea/
 
-# WorkBuddy internal
+# Local tools and internal workspace files
+tools/
+.runtime/
 .workbuddy/
